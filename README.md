@@ -4,7 +4,7 @@ A local web interface for **Kokoro TTS** (text-to-speech). It runs a Flask API t
 
 ## Requirements
 
-- **Python 3.13** (tested and working)
+- **Python 3.12** (tested and working)
 - [uv](https://github.com/astral-sh/uv) (installed automatically by the setup script if missing)
 - Enough disk and RAM for the Kokoro model and PyTorch/torchaudio
 
