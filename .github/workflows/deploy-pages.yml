@@ -1,65 +1,43 @@
-name: Host Kokoro API Server
+name: Deploy to GitHub Pages
 
 on:
-  workflow_dispatch: # Allows you to trigger this manually
+  # Runs on pushes targeting the main branch
+  push:
+    branches: ["main"]
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow only one concurrent deployment
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
 
 jobs:
-  run-server:
+  # Single deploy job since we're just deploying static HTML
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
-    
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v4
-
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.12" # Required by Kokoro/Spacy
-
-    - name: Install System Audio Dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libsndfile1 espeak-ng
-
-    - name: Setup Node.js (for Localtunnel)
-      uses: actions/setup-node@v4
-      with:
-        node-version: '20'
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
         
-    - name: Install Localtunnel
-      run: npm install -g localtunnel
-
-    - name: Start Kokoro API via setup.py (Background)
-      run: |
-        # Run your setup script in the background
-        # It handles uv, venv, pip install, and running api_server.py
-        python setup.py > server.log 2>&1 &
-        
-        # Wait for the setup.py to finish downloading models and start the server
-        echo "Waiting for setup.py to build environment and start API server..."
-        sleep 45 
-        
-        # Verify it started
-        curl -s http://127.0.0.1:8000/voices || echo "API not responding yet, check server.log if it fails"
-
-    - name: Expose API and Keep Alive
-      run: |
-        # Start localtunnel and expose port 8000
-        lt --port 8000 > tunnel.log 2>&1 &
-        
-        sleep 5
-        # Extract the public URL
-        TUNNEL_URL=$(grep "your url is:" tunnel.log | awk '{print $4}')
-        
-        echo "=========================================================="
-        echo "🚀 KOKORO API IS LIVE! 🚀"
-        echo "🔗 API URL: $TUNNEL_URL"
-        echo "=========================================================="
-        echo "Copy this URL and paste it into the API_BASE variable in your web_gui.html"
-        echo "=========================================================="
-        
-        # Print the server log so you can see if the model loaded correctly
-        cat server.log
-        
-        # Keep the action running so the server doesn't shut down
-        tail -f server.log
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          # Upload entire repository (which now contains index.html)
+          path: '.'
+          
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
