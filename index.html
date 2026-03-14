@@ -290,9 +290,9 @@
     </div>
 
     <script>
-        // This points to your Flask server
+        // Make sure to replace this with your actual localtunnel URL from GitHub Actions!
         const API_BASE = "http://127.0.0.1:8000";
-
+    
         const voiceSelect = document.getElementById("voice");
         const textInput = document.getElementById("text");
         const speedInput = document.getElementById("speed");
@@ -303,17 +303,17 @@
         const downloadBtn = document.getElementById("downloadBtn");
         const audioPlayer = document.getElementById("audioPlayer");
         const errorMessage = document.getElementById("errorMessage");
-
+    
         let currentAudioUrl = null;
         let audioContext = null;
         let decodedBuffer = null;
         let pitchShiftedUrl = null;
-
+    
         function getAudioContext() {
             if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
             return audioContext;
         }
-
+    
         function linearInterpolate(channel, pos) {
             const len = channel.length;
             if (pos <= 0) return channel[0];
@@ -323,7 +323,7 @@
             const f = pos - i0;
             return (1 - f) * channel[i0] + f * channel[i1];
         }
-
+    
         function pitchShiftBuffer(sourceBuffer, pitchFactor) {
             if (pitchFactor === 1) return sourceBuffer;
             const numChannels = sourceBuffer.numberOfChannels;
@@ -341,7 +341,7 @@
             }
             return outBuffer;
         }
-
+    
         function encodeBufferToWav(buffer) {
             const numChannels = buffer.numberOfChannels;
             const sampleRate = buffer.sampleRate;
@@ -379,7 +379,7 @@
             }
             return new Blob([arrayBuffer], { type: "audio/wav" });
         }
-
+    
         function applyPitchToPlayer() {
             if (!decodedBuffer) return;
             const pitch = parseFloat(pitchInput.value);
@@ -398,47 +398,47 @@
             pitchShiftedUrl = URL.createObjectURL(blob);
             audioPlayer.src = pitchShiftedUrl;
         }
-
+    
         function makeFilenameFromText(text) {
             const fallback = "kokoro_tts_audio.wav";
             if (!text) return fallback;
             const trimmed = text.trim();
             if (!trimmed) return fallback;
-            // Take first 32 characters and add "..." if longer
             let base = trimmed.slice(0, 32);
             if (trimmed.length > 32) {
                 base += "...";
             }
-            // Replace characters that are illegal/problematic in filenames
             base = base.replace(/[\\/:*?"<>|]/g, "_");
-            // Also collapse whitespace
             base = base.replace(/\s+/g, " ").trim();
             if (!base) return fallback;
             return `${base}.wav`;
         }
-
-        // Update the speed text when sliding
+    
         speedInput.addEventListener("input", (e) => {
             speedValue.textContent = parseFloat(e.target.value).toFixed(1) + "x";
         });
-
-        // True pitch shift: resample buffer so pitch changes (duration changes inversely)
+    
         pitchInput.addEventListener("input", () => applyPitchToPlayer());
-
+    
         function showError(msg) {
             errorMessage.textContent = msg;
             errorMessage.style.display = "block";
         }
-
+    
         // 1. Fetch voices from Flask when the page loads
         async function loadVoices() {
             try {
-                const response = await fetch(`${API_BASE}/voices`);
+                const response = await fetch(`${API_BASE}/voices`, {
+                    headers: {
+                        // Added to bypass the Localtunnel Warning Page
+                        "bypass-tunnel-reminder": "true"
+                    }
+                });
                 if (!response.ok) throw new Error("Failed to fetch voices");
-
+    
                 const data = await response.json();
                 voiceSelect.innerHTML = "";
-
+    
                 data.voices.forEach(voice => {
                     const option = document.createElement("option");
                     option.value = voice;
@@ -448,38 +448,42 @@
             } catch (error) {
                 console.error("Error loading voices:", error);
                 voiceSelect.innerHTML = '<option value="af_heart">af_heart (Fallback)</option>';
-                showError("Could not connect to the backend server. Is Flask running on port 8000?");
+                showError("Could not connect to the backend server. Make sure your GitHub Actions API is running!");
             }
         }
-
+    
         // 2. Send text to Flask to generate audio
         generateBtn.addEventListener("click", async (event) => {
             event.preventDefault();
             const text = textInput.value.trim();
             if (!text) return alert("Please enter some text!");
-
+    
             errorMessage.style.display = "none";
             generateBtn.disabled = true;
             generateBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg> Generating...';
             audioPlayer.style.display = "none";
             downloadBtn.style.display = "none";
-
+    
             try {
                 const response = await fetch(`${API_BASE}/synthesize`, {
                     method: "POST",
-                    headers: { "Content-Type": "application/json" },
+                    headers: { 
+                        "Content-Type": "application/json",
+                        // Added to bypass the Localtunnel Warning Page
+                        "bypass-tunnel-reminder": "true"
+                    },
                     body: JSON.stringify({
                         text: text,
                         voice: voiceSelect.value,
                         speed: parseFloat(speedInput.value)
                     })
                 });
-
+    
                 if (!response.ok) {
                     const errData = await response.json().catch(() => ({}));
                     throw new Error(errData.error || `Server error: ${response.status}`);
                 }
-
+    
                 const blob = await response.blob();
                 
                 if (currentAudioUrl) URL.revokeObjectURL(currentAudioUrl);
@@ -493,13 +497,13 @@
                 const ctx = getAudioContext();
                 const arrayBuffer = await blob.arrayBuffer();
                 decodedBuffer = await ctx.decodeAudioData(arrayBuffer);
-
+    
                 applyPitchToPlayer();
                 audioPlayer.style.display = "block";
                 audioPlayer.play();
                 
                 downloadBtn.style.display = "flex";
-
+    
             } catch (error) {
                 console.error("Synthesis error:", error);
                 showError(error.message || "Failed to generate speech.");
@@ -508,7 +512,7 @@
                 generateBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path></svg> Generate Speech';
             }
         });
-
+    
         // 3. Handle the download button click (downloads what you hear, including pitch)
         downloadBtn.addEventListener("click", () => {
             const url = audioPlayer.src;
@@ -523,10 +527,11 @@
             a.click();
             document.body.removeChild(a);
         });
-
+    
         // Run on startup
         loadVoices();
     </script>
+    
 </body>
 
 </html>
