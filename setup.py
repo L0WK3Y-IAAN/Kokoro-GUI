@@ -27,16 +27,19 @@ def main():
     else:
         print("[+] Virtual environment already exists.")
 
-    # 3. Install/Sync dependencies
+    # 3. Install/Sync dependencies into the venv (not system Python)
+    venv_python = os.path.join(".venv", "Scripts", "python.exe") if os.name == "nt" else os.path.join(".venv", "bin", "python")
+    # uv venv does not include pip; some dependencies expect it at runtime
+    print("[*] Ensuring pip in venv...")
+    run_cmd([sys.executable, "-m", "uv", "pip", "install", "pip", "--python", venv_python])
     print("[*] Installing dependencies...")
-    run_cmd([sys.executable, "-m", "uv", "pip", "install", "-r", "requirements.txt"])
+    run_cmd([sys.executable, "-m", "uv", "pip", "install", "-r", "requirements.txt", "--python", venv_python])
 
-    # 4. Start the server
-    # 'uv run' is completely cross-platform and automatically uses the .venv we just created
+    # 4. Start the server using the venv we installed into (uv run does not use project .venv by default)
     print("[+] Setup complete! Starting the Flask backend...")
     print("--------------------------------------------------")
     try:
-        run_cmd([sys.executable, "-m", "uv", "run", "api_server-2.py"])
+        run_cmd([venv_python, "api_server.py"])
     except KeyboardInterrupt:
         print("\n[*] Server stopped by user.")
 
