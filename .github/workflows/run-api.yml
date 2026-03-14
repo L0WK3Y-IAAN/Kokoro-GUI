@@ -1,7 +1,7 @@
 name: Host Kokoro API Server
 
 on:
-  workflow_dispatch: # Allows you to manually start the server from the Actions tab
+  workflow_dispatch: # Allows you to manually start the server
 
 jobs:
   run-server:
@@ -14,7 +14,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: "3.12" # Required by Kokoro/Spacy
+        python-version: "3.12" 
 
     - name: Install System Audio Dependencies
       run: |
@@ -29,28 +29,23 @@ jobs:
     - name: Install Localtunnel
       run: npm install -g localtunnel
 
-    - name: Build Environment (setup.py)
+    - name: Start Kokoro API (via setup.py)
       run: |
-        # Run your setup script in the background to install uv, venv, and requirements
-        python setup.py > setup.log 2>&1 &
-        SETUP_PID=$!
+        # Run your setup script in the background
+        # It handles uv, venv, requirements, AND starts the Flask server
+        python setup.py > server.log 2>&1 &
         
-        echo "Waiting for setup.py to build the environment..."
-        sleep 60
+        echo "Waiting for setup.py to build environment and start API server..."
         
-        # Kill the setup.py wrapper so it doesn't block the GitHub runner
-        kill $SETUP_PID || true
-
-    - name: Start Kokoro API Server (Background)
-      run: |
-        # Run the API server directly using the virtual environment setup.py created
-        ./.venv/bin/python api_server.py > server.log 2>&1 &
-        
-        echo "Waiting for the Kokoro model to load into memory..."
-        sleep 30
-        
-        # Verify the server started successfully
-        curl -s http://127.0.0.1:8000/voices || echo "API not responding yet, check server.log if it fails"
+        # Poll the server until it responds (max 2 minutes)
+        for i in {1..24}; do
+          if curl -s http://127.0.0.1:8000/voices > /dev/null; then
+            echo "API Server is UP!"
+            break
+          fi
+          echo "Waiting..."
+          sleep 5
+        done
 
     - name: Expose API and Keep Alive
       run: |
@@ -68,9 +63,5 @@ jobs:
         echo "Copy this URL and paste it into the API_BASE variable in your index.html"
         echo "=========================================================="
         
-        # Print the server log so you can confirm the model loaded correctly
-        cat server.log
-        
-        # Keep the GitHub Action running so the server doesn't shut down
-        # Note: GitHub Actions will automatically time out after 6 hours
+        # Keep the Action running so the server doesn't shut down
         tail -f server.log
