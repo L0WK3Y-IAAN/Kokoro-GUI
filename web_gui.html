@@ -268,6 +268,12 @@
             <span class="speed-display" id="speedValue">1.0x</span>
         </div>
 
+        <div class="form-group">
+            <label for="pitch">Pitch</label>
+            <input type="range" id="pitch" min="0.5" max="2.0" step="0.05" value="1.0">
+            <span class="speed-display" id="pitchValue">1.0x</span>
+        </div>
+
         <div class="button-group">
             <button type="button" id="generateBtn">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path></svg>
@@ -291,17 +297,133 @@
         const textInput = document.getElementById("text");
         const speedInput = document.getElementById("speed");
         const speedValue = document.getElementById("speedValue");
+        const pitchInput = document.getElementById("pitch");
+        const pitchValue = document.getElementById("pitchValue");
         const generateBtn = document.getElementById("generateBtn");
         const downloadBtn = document.getElementById("downloadBtn");
         const audioPlayer = document.getElementById("audioPlayer");
         const errorMessage = document.getElementById("errorMessage");
 
         let currentAudioUrl = null;
+        let audioContext = null;
+        let decodedBuffer = null;
+        let pitchShiftedUrl = null;
+
+        function getAudioContext() {
+            if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            return audioContext;
+        }
+
+        function linearInterpolate(channel, pos) {
+            const len = channel.length;
+            if (pos <= 0) return channel[0];
+            if (pos >= len - 1) return channel[len - 1];
+            const i0 = Math.floor(pos);
+            const i1 = i0 + 1;
+            const f = pos - i0;
+            return (1 - f) * channel[i0] + f * channel[i1];
+        }
+
+        function pitchShiftBuffer(sourceBuffer, pitchFactor) {
+            if (pitchFactor === 1) return sourceBuffer;
+            const numChannels = sourceBuffer.numberOfChannels;
+            const sampleRate = sourceBuffer.sampleRate;
+            const inLength = sourceBuffer.length;
+            const outLength = Math.round(inLength / pitchFactor);
+            const ctx = getAudioContext();
+            const outBuffer = ctx.createBuffer(numChannels, outLength, sampleRate);
+            for (let ch = 0; ch < numChannels; ch++) {
+                const inCh = sourceBuffer.getChannelData(ch);
+                const outCh = outBuffer.getChannelData(ch);
+                for (let i = 0; i < outLength; i++) {
+                    outCh[i] = linearInterpolate(inCh, i * pitchFactor);
+                }
+            }
+            return outBuffer;
+        }
+
+        function encodeBufferToWav(buffer) {
+            const numChannels = buffer.numberOfChannels;
+            const sampleRate = buffer.sampleRate;
+            const length = buffer.length * numChannels;
+            const byteRate = sampleRate * numChannels * 2;
+            const blockAlign = numChannels * 2;
+            const dataSize = length * 2;
+            const headerSize = 44;
+            const arrayBuffer = new ArrayBuffer(headerSize + dataSize);
+            const view = new DataView(arrayBuffer);
+            const write = (offset, value, littleEndian = true) => view.setUint32(offset, value, littleEndian);
+            const write16 = (offset, value, le = true) => view.setUint16(offset, value, le);
+            view.setUint8(0, 0x52); view.setUint8(1, 0x49); view.setUint8(2, 0x46); view.setUint8(3, 0x46);
+            write(4, 36 + dataSize);
+            view.setUint8(8, 0x57); view.setUint8(9, 0x41); view.setUint8(10, 0x56); view.setUint8(11, 0x45);
+            view.setUint8(12, 0x66); view.setUint8(13, 0x6d); view.setUint8(14, 0x74); view.setUint8(15, 0x20);
+            write(16, 16);
+            write16(20, 1);
+            write16(22, numChannels);
+            write(24, sampleRate);
+            write(28, byteRate);
+            write16(32, blockAlign);
+            write16(34, 16);
+            view.setUint8(36, 0x64); view.setUint8(37, 0x61); view.setUint8(38, 0x74); view.setUint8(39, 0x61);
+            write(40, dataSize);
+            const offset = headerSize;
+            const channels = [];
+            for (let ch = 0; ch < numChannels; ch++) channels.push(buffer.getChannelData(ch));
+            for (let i = 0; i < buffer.length; i++) {
+                for (let ch = 0; ch < numChannels; ch++) {
+                    const s = Math.max(-1, Math.min(1, channels[ch][i]));
+                    const pcm = s < 0 ? Math.round(s * 32768) : Math.round(s * 32767);
+                    view.setInt16(offset + (i * numChannels + ch) * 2, pcm, true);
+                }
+            }
+            return new Blob([arrayBuffer], { type: "audio/wav" });
+        }
+
+        function applyPitchToPlayer() {
+            if (!decodedBuffer) return;
+            const pitch = parseFloat(pitchInput.value);
+            pitchValue.textContent = pitch.toFixed(2) + "x";
+            if (pitch === 1) {
+                audioPlayer.src = currentAudioUrl;
+                if (pitchShiftedUrl) {
+                    URL.revokeObjectURL(pitchShiftedUrl);
+                    pitchShiftedUrl = null;
+                }
+                return;
+            }
+            const shifted = pitchShiftBuffer(decodedBuffer, pitch);
+            const blob = encodeBufferToWav(shifted);
+            if (pitchShiftedUrl) URL.revokeObjectURL(pitchShiftedUrl);
+            pitchShiftedUrl = URL.createObjectURL(blob);
+            audioPlayer.src = pitchShiftedUrl;
+        }
+
+        function makeFilenameFromText(text) {
+            const fallback = "kokoro_tts_audio.wav";
+            if (!text) return fallback;
+            const trimmed = text.trim();
+            if (!trimmed) return fallback;
+            // Take first 32 characters and add "..." if longer
+            let base = trimmed.slice(0, 32);
+            if (trimmed.length > 32) {
+                base += "...";
+            }
+            // Replace characters that are illegal/problematic in filenames
+            base = base.replace(/[\\/:*?"<>|]/g, "_");
+            // Also collapse whitespace
+            base = base.replace(/\s+/g, " ").trim();
+            if (!base) return fallback;
+            return `${base}.wav`;
+        }
 
         // Update the speed text when sliding
         speedInput.addEventListener("input", (e) => {
             speedValue.textContent = parseFloat(e.target.value).toFixed(1) + "x";
         });
+
+        // True pitch shift: resample buffer so pitch changes (duration changes inversely)
+        pitchInput.addEventListener("input", () => applyPitchToPlayer());
 
         function showError(msg) {
             errorMessage.textContent = msg;
@@ -360,13 +482,19 @@
 
                 const blob = await response.blob();
                 
-                if (currentAudioUrl) {
-                    URL.revokeObjectURL(currentAudioUrl);
+                if (currentAudioUrl) URL.revokeObjectURL(currentAudioUrl);
+                if (pitchShiftedUrl) {
+                    URL.revokeObjectURL(pitchShiftedUrl);
+                    pitchShiftedUrl = null;
                 }
                 
                 currentAudioUrl = URL.createObjectURL(blob);
+                decodedBuffer = null;
+                const ctx = getAudioContext();
+                const arrayBuffer = await blob.arrayBuffer();
+                decodedBuffer = await ctx.decodeAudioData(arrayBuffer);
 
-                audioPlayer.src = currentAudioUrl;
+                applyPitchToPlayer();
                 audioPlayer.style.display = "block";
                 audioPlayer.play();
                 
@@ -381,13 +509,16 @@
             }
         });
 
-        // 3. Handle the download button click
+        // 3. Handle the download button click (downloads what you hear, including pitch)
         downloadBtn.addEventListener("click", () => {
-            if (!currentAudioUrl) return;
+            const url = audioPlayer.src;
+            if (!url || url === "") return;
+            const text = textInput.value || "";
+            const filename = makeFilenameFromText(text);
             
             const a = document.createElement("a");
-            a.href = currentAudioUrl;
-            a.download = "kokoro_tts_audio.wav"; 
+            a.href = url;
+            a.download = filename; 
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
