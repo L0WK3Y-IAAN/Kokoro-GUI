@@ -1,47 +1,193 @@
 import os
+import platform
+import shutil
 import subprocess
 import sys
 
+# ── helpers ──────────────────────────────────────────────────────────────────
+
 def run_cmd(cmd):
-    """Utility to run shell commands cleanly."""
-    print(f"[*] Running: {' '.join(cmd)}")
+    """Run a command, printing it first. Raises on non-zero exit."""
+    print(f"[*] Running: {' '.join(str(c) for c in cmd)}")
     subprocess.run(cmd, check=True)
+
+
+def is_windows():
+    return os.name == "nt"
+
+
+def venv_python_path():
+    """Return the path to the Python binary inside .venv (cross-platform)."""
+    if is_windows():
+        return os.path.join(".venv", "Scripts", "python.exe")
+    return os.path.join(".venv", "bin", "python")
+
+
+# ── uv installation ───────────────────────────────────────────────────────────
+
+INSTALL_HINTS = {
+    "arch":   "sudo pacman -S uv",
+    "debian": "pipx install uv  # or: pip install uv",
+    "fedora": "pip install uv   # or: pipx install uv",
+    "darwin": "brew install uv  # or: pip install uv",
+    "win32":  "winget install --id=astral-sh.uv  # or: pip install uv",
+}
+
+def get_install_hint():
+    p = sys.platform
+    if p == "darwin":
+        return INSTALL_HINTS["darwin"]
+    if p == "win32":
+        return INSTALL_HINTS["win32"]
+    name = ""
+    try:
+        with open("/etc/os-release") as f:
+            for line in f:
+                if line.startswith("ID="):
+                    name = line.strip().split("=", 1)[1].strip('"').lower()
+                    break
+    except OSError:
+        pass
+    if "arch" in name or "manjaro" in name or "endeavour" in name:
+        return INSTALL_HINTS["arch"]
+    if any(x in name for x in ("debian", "ubuntu", "mint", "pop", "kali")):
+        return INSTALL_HINTS["debian"]
+    if any(x in name for x in ("fedora", "rhel", "centos", "rocky", "alma")):
+        return INSTALL_HINTS["fedora"]
+    return "pip install uv   # or visit https://docs.astral.sh/uv/getting-started/installation/"
+
+
+def ensure_uv():
+    """
+    Find or install uv, returning the command prefix to invoke it.
+    Preference order:
+      1. 'uv' already on PATH  (system package, pipx, etc.)
+      2. Install via the official installer script (macOS/Linux/Windows)
+      3. pip fallback
+    Returns a list, e.g. ['uv'] or [sys.executable, '-m', 'uv'].
+    """
+    if shutil.which("uv"):
+        print("[+] 'uv' found on PATH.")
+        return ["uv"]
+
+    print("[-] 'uv' not found on PATH. Attempting automatic install...")
+
+    installed = False
+    if sys.platform in ("linux", "darwin"):
+        curl = shutil.which("curl")
+        sh   = shutil.which("sh")
+        if curl and sh:
+            print("[*] Installing uv via official installer (curl | sh)...")
+            try:
+                installer = subprocess.run(
+                    [curl, "-LsSf", "https://astral.sh/uv/install.sh"],
+                    capture_output=True, check=True
+                )
+                subprocess.run([sh], input=installer.stdout, check=True)
+                installed = True
+            except subprocess.CalledProcessError as e:
+                print(f"[!] Installer failed: {e}")
+
+    elif sys.platform == "win32":
+        pwsh = shutil.which("pwsh") or shutil.which("powershell")
+        if pwsh:
+            print("[*] Installing uv via official installer (PowerShell)...")
+            try:
+                run_cmd([pwsh, "-Command",
+                         "irm https://astral.sh/uv/install.ps1 | iex"])
+                installed = True
+            except subprocess.CalledProcessError as e:
+                print(f"[!] Installer failed: {e}")
+
+    if not installed:
+        print("[*] Falling back to: pip install uv")
+        base_python = _base_python()
+        try:
+            run_cmd([base_python, "-m", "pip", "install", "uv"])
+            installed = True
+        except subprocess.CalledProcessError:
+            pass
+
+    # Re-check PATH — installer puts uv in ~/.local/bin or ~/.cargo/bin
+    extra_paths = [
+        os.path.expanduser("~/.local/bin"),
+        os.path.expanduser("~/.cargo/bin"),
+    ]
+    for ep in extra_paths:
+        candidate = os.path.join(ep, "uv.exe" if is_windows() else "uv")
+        if os.path.isfile(candidate):
+            print(f"[+] Found uv at {candidate}")
+            return [candidate]
+
+    if shutil.which("uv"):
+        print("[+] 'uv' now available on PATH.")
+        return ["uv"]
+
+    try:
+        subprocess.run([sys.executable, "-m", "uv", "--version"],
+                       check=True, capture_output=True)
+        print("[+] 'uv' available as python module.")
+        return [sys.executable, "-m", "uv"]
+    except subprocess.CalledProcessError:
+        pass
+
+    hint = get_install_hint()
+    print(f"\n[!] Could not install uv automatically.")
+    print(f"    Please install it manually and re-run this script:")
+    print(f"    {hint}")
+    print(f"    Full docs: https://docs.astral.sh/uv/getting-started/installation/")
+    sys.exit(1)
+
+
+def _base_python():
+    """
+    Return a system-level Python executable, escaping any active venv.
+    Useful as a pip fallback when sys.executable is a stripped venv Python.
+    """
+    base = getattr(sys, "real_prefix", None) or getattr(sys, "base_prefix", sys.prefix)
+    if base == sys.prefix:
+        return sys.executable
+    for name in ("python3", "python"):
+        found = shutil.which(name)
+        if found and sys.prefix not in found:
+            return found
+    return sys.executable
+
+
+# ── main ──────────────────────────────────────────────────────────────────────
 
 def main():
     print("[*] Setting up Kokoro TTS Server...")
+    print(f"[*] Platform: {platform.system()} {platform.release()} / Python {sys.version.split()[0]}")
 
-    # 1. Ensure 'uv' is installed
-    # We use 'python -m uv' instead of just 'uv' to completely avoid PATH issues on Windows
-    try:
-        subprocess.run([sys.executable, "-m", "uv", "--version"], 
-                       check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        print("[+] 'uv' is already installed.")
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        print("[-] 'uv' is not installed. Installing via pip...")
-        run_cmd([sys.executable, "-m", "pip", "install", "uv"])
+    uv = ensure_uv()
 
-    # 2. Create virtual environment if it doesn't exist
+    # Create venv with --seed so pip is always available inside it
     if not os.path.exists(".venv"):
         print("[*] Creating virtual environment...")
-        run_cmd([sys.executable, "-m", "uv", "venv"])
+        run_cmd(uv + ["venv", ".venv", "--seed"])
     else:
         print("[+] Virtual environment already exists.")
+        # Ensure pip is seeded into existing venv too
+        py = venv_python_path()
+        try:
+            subprocess.run([py, "-m", "pip", "--version"],
+                           check=True, capture_output=True)
+        except subprocess.CalledProcessError:
+            print("[*] pip missing from existing venv — reseeding...")
+            run_cmd(uv + ["pip", "install", "pip", "--seed", "--python", py])
 
-    # 3. Install/Sync dependencies into the venv (not system Python)
-    venv_python = os.path.join(".venv", "Scripts", "python.exe") if os.name == "nt" else os.path.join(".venv", "bin", "python")
-    # uv venv does not include pip; some dependencies expect it at runtime
-    print("[*] Ensuring pip in venv...")
-    run_cmd([sys.executable, "-m", "uv", "pip", "install", "pip", "--python", venv_python])
-    print("[*] Installing dependencies...")
-    run_cmd([sys.executable, "-m", "uv", "pip", "install", "-r", "requirements.txt", "--python", venv_python])
+    py = venv_python_path()
+    print("[*] Installing dependencies from requirements.txt...")
+    run_cmd(uv + ["pip", "install", "-r", "requirements.txt", "--python", py])
 
-    # 4. Start the server using the venv we installed into (uv run does not use project .venv by default)
     print("[+] Setup complete! Starting the Flask backend...")
     print("--------------------------------------------------")
     try:
-        run_cmd([venv_python, "api_server.py"])
+        run_cmd([py, "api_server.py"])
     except KeyboardInterrupt:
         print("\n[*] Server stopped by user.")
+
 
 if __name__ == "__main__":
     main()
