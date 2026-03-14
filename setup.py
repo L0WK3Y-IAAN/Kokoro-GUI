@@ -3,6 +3,8 @@ import platform
 import shutil
 import subprocess
 import sys
+import time
+import webbrowser
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -14,6 +16,25 @@ def run_cmd(cmd):
 
 def is_windows():
     return os.name == "nt"
+
+
+def _wait_for_server(port=8000, timeout=120):
+    """Poll until the Flask server responds or timeout."""
+    try:
+        from urllib.request import urlopen
+        from urllib.error import URLError
+    except ImportError:
+        time.sleep(5)
+        return
+    url = f"http://127.0.0.1:{port}/voices"
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            urlopen(url, timeout=2)
+            return
+        except (URLError, OSError):
+            time.sleep(0.5)
+    raise SystemExit("[!] Server did not become ready in time.")
 
 
 def venv_python_path():
@@ -162,14 +183,26 @@ def main():
 
     uv = ensure_uv()
 
-    # Create venv with --seed so pip is always available inside it
+    # Create venv with Python 3.12 (spacy/kokoro stack needs it; 3.13+ breaks Pydantic v1)
     if not os.path.exists(".venv"):
-        print("[*] Creating virtual environment...")
-        run_cmd(uv + ["venv", ".venv", "--seed"])
+        print("[*] Creating virtual environment (Python 3.12)...")
+        run_cmd(uv + ["venv", ".venv", "--python", "3.12", "--seed"])
     else:
-        print("[+] Virtual environment already exists.")
-        # Ensure pip is seeded into existing venv too
         py = venv_python_path()
+        # Require Python 3.12 (spacy/kokoro break on 3.13+ due to Pydantic v1)
+        try:
+            result = subprocess.run(
+                [py, "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
+                capture_output=True, text=True, check=True
+            )
+            venv_ver = result.stdout.strip()
+            if venv_ver not in ("3.12",):
+                print(f"[!] .venv is Python {venv_ver}; kokoro/spacy need 3.12.")
+                print("    Remove .venv and re-run this script to create a 3.12 venv.")
+                sys.exit(1)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            pass
+        print("[+] Virtual environment already exists.")
         try:
             subprocess.run([py, "-m", "pip", "--version"],
                            check=True, capture_output=True)
@@ -183,10 +216,21 @@ def main():
 
     print("[+] Setup complete! Starting the Flask backend...")
     print("--------------------------------------------------")
+    server = subprocess.Popen([py, "api_server.py"], cwd=os.path.dirname(os.path.abspath(__file__)) or ".")
     try:
-        run_cmd([py, "api_server.py"])
+        _wait_for_server(port=8000, timeout=120)
+        gui_path = os.path.join(os.path.dirname(os.path.abspath(__file__)) or ".", "web_gui.html")
+        if os.path.isfile(gui_path):
+            path = os.path.abspath(gui_path).replace("\\", "/")
+            webbrowser.open(("file:///" + path) if not path.startswith("/") else ("file://" + path))
+            print("[+] Opened web_gui.html in your browser.")
+        else:
+            print(f"[!] web_gui.html not found at {gui_path}")
+        server.wait()
     except KeyboardInterrupt:
         print("\n[*] Server stopped by user.")
+        server.terminate()
+        server.wait()
 
 
 if __name__ == "__main__":
